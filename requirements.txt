@@ -1,0 +1,14 @@
+numpy
+pandas
+tqdm
+scikit-learn
+nltk
+torch
+gradio
+wikipedia
+huggingface-hub
+transformers
+datasets
+keybert
+keyphrase-vectorizers
+sentence-transformers
