@@ -6,7 +6,7 @@ def load_wiki_documents(question):
     """
     results = wiki.search(question)
     docs = []
-    for page in results[:3]:
+    for page in results:
         try:
             docs.append(wiki.page(page, auto_suggest=False).content)
         except Exception as e:
@@ -18,6 +18,9 @@ def read_uploaded_files(files):
     Legge i file caricati e restituisce una lista di testi.
     """
     docs = []
+    if files == None:
+        return docs
+    
     for file in files:
         try:
             with open(file.name, "r", encoding="utf-8") as f:

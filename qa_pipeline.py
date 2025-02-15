@@ -27,12 +27,14 @@ Make sure you to only return the keywords and say nothing else. For example, don
 I have the following document:
 - [DOCUMENT]
 
+With the following candidate keywords:
+- [CANDIDATES]
+
 Please give me the keywords that are present in this document and separate them with commas.
 Make sure you to only return the keywords and say nothing else. For example, don't say:
 "Here are the keywords present in the document"
 [/INST]
 """
-
 
 def initialize_models(embedding_model, llm_model, qa_model, sum_model):
     """
@@ -63,7 +65,6 @@ def initialize_models(embedding_model, llm_model, qa_model, sum_model):
         print("Loading KeyBERT model...")
         kw_bert_model = KeyBERT(model)
         
-        """
         # Initialize the KeyLLM model
         print("Loading KeyLLM model...")
         tokenizer = AutoTokenizer.from_pretrained(llm_model)
@@ -81,7 +82,7 @@ def initialize_models(embedding_model, llm_model, qa_model, sum_model):
         )
         llm = TextGeneration(generator, prompt=KEY_LLM_PROMPT)  # KEYLLM_PROMPT global variable
         kw_llm_model = KeyLLM(llm)
-        """
+            
         # Initialize the question answering model
         print("Loading Question Answering model...")
         question_answerer = pipeline("question-answering", model=qa_model, device=device)
@@ -93,9 +94,7 @@ def initialize_models(embedding_model, llm_model, qa_model, sum_model):
         print("Models loaded successfully!")
     except Exception as e:
         print(f"An error occurred while loading the models: {e}")
-    ###
-    kw_llm_model = None
-    ###
+    
     return model, kw_bert_model, kw_llm_model, question_answerer, summarizer
 
 def clean_document(document):
@@ -145,117 +144,123 @@ def split_document(document, max_tokens, overlap_percentage):
     chunks = [' '.join(tokens[i:i + max_tokens]) for i in range(0, len(tokens), step)]
     return chunks
 
-
-def extract_keywords_from_text(docs, kw_bert_model, kw_llm_model, use_keyllm, diversity, top_n):
+def get_top_kw (doc, candidates, model, top_n):
     """
-    Extracts keywords from the input document(s) using either KeyBERT or a combination of KeyBERT and KeyLLM.
-
-    Args:
-        docs (str or list): The input text(s) to process.
-        kw_bert_model (KeyBERT): A KeyBERT model for keyword extraction.
-        kw_llm_model (KeyLLM): A KeyLLM model for refining keywords (used if `use_keyllm` is True).
-        use_keyllm (bool): If True, uses KeyLLM to refine the keywords extracted by KeyBERT.
-        diversity (float): Diversity parameter for MMR to ensure varied keywords.
-        top_n (int): Number of top keywords to return.
-
-    Returns:
-        list: A list of extracted keywords.
-    """
-    if use_keyllm:
-        try:
-            # Extract initial keywords with KeyBERT (limit to 20 for LLM processing)
-            initial_keywords = kw_bert_model.extract_keywords(
-                docs=docs, 
-                vectorizer=KeyphraseCountVectorizer(), 
-                use_mmr=True, 
-                diversity=diversity, 
-                top_n=20
-            )
-        except ValueError as e:
-            print(f"ValueError occurred: {e}")
-            initial_keywords = kw_bert_model.extract_keywords(
-                docs=docs,
-                use_mmr=True, 
-                diversity=diversity, 
-                top_n=20
-            )
-        
-        # Refine the keywords using KeyLLM
-        refined_keywords = kw_llm_model.extract_keywords(docs=docs, candidate_keywords=initial_keywords)
-
-        # Re-rank the refined keywords and select the top_n with KeyBERT
-        keywords_list = kw_bert_model.extract_keywords(
-            docs=docs, 
-            candidates=refined_keywords,
-            use_mmr=True, 
-            diversity=diversity, 
-            top_n=top_n # < 20
-        )
-    else:
-        try:
-            # Directly extract the top_n keywords using KeyBERT
-            keywords_list = kw_bert_model.extract_keywords(
-                docs=docs, 
-                vectorizer=KeyphraseCountVectorizer(), 
-                use_mmr=True, 
-                diversity=diversity, 
-                top_n=top_n
-            )
-        except ValueError as e:
-            print(f"ValueError occurred: {e}")
-            keywords_list = kw_bert_model.extract_keywords(
-                docs=docs,
-                use_mmr=True, 
-                diversity=diversity, 
-                top_n=top_n
-            )
+    Get top keywords based on similarity to the document.
     
-    return keywords_list
+    Args:
+        doc: Input document text
+        candidates: List of candidate keywords
+        model: SentenceTransformer model for encoding
+        top_n: Number of top keywords to return
+    
+    Returns:
+        List of tuples containing (keyword, similarity_score)
+    """
+    # Encode document and candidates
+    doc_embedding = model.encode(doc).reshape(1, -1)
+    candidate_embeddings = model.encode(candidates)
+    
+    # Calculate cosine similarities using sklearn
+    similarities = cosine_similarity(candidate_embeddings, doc_embedding).flatten()
+    
+    # Get top keywords with their scores
+    top_indices = similarities.argsort()[-top_n:][::-1]
+    return [(candidates[idx], float(similarities[idx])) for idx in top_indices]
+    
+def extract_keywords_from_text(doc, kw_bert_model, kw_llm_model, model, use_keyllm, diversity, top_n):
+    """
+    Extract keywords from text using KeyBERT and optionally KeyLLM.
+    
+    Args:
+        doc: Input text
+        kw_bert_model: KeyBERT model instance
+        kw_llm_model: KeyLLM model instance (optional)
+        model: SentenceTransformer model for encoding
+        use_keyllm: Whether to use KeyLLM for refinement
+        diversity: Diversity parameter for MMR
+        top_n: Number of keywords to extract
+    
+    Returns:
+        List of tuples containing (keyword, score)
+    """
+    def extract_with_keybert(top_n):
+        """Helper function for KeyBERT extraction with error handling"""
+        try:
+            return kw_bert_model.extract_keywords(
+                docs=doc,
+                vectorizer=KeyphraseCountVectorizer(),
+                use_mmr=True,
+                diversity=diversity,
+                top_n=top_n
+            )
+        except ValueError as e:
+            print(f"KeyphraseCountVectorizer failed, falling back to default: {e}")
+            return kw_bert_model.extract_keywords(
+                docs=doc,
+                use_mmr=True,
+                diversity=diversity,
+                top_n=top_n
+            )
+
+    if use_keyllm:
+        # Get initial keywords from KeyBERT (limited to 20 for LLM processing)
+        initial_keywords = extract_with_keybert(20)
+        initial_keyword_texts = [kw[0] for kw in initial_keywords]
+        
+        # Refine using KeyLLM
+        refined_keywords = kw_llm_model.extract_keywords(
+            docs=doc,
+            candidate_keywords=initial_keywords
+        )[0]
+        
+        # Combine and deduplicate candidates
+        all_candidates = list(set(initial_keyword_texts) | set(refined_keywords))
+        all_candidates = [c for c in all_candidates if c]  # Remove empty strings
+        
+        # Get final keywords based on similarity
+        return get_top_kw(doc, all_candidates, model, top_n)
+    
+    # Use KeyBERT only
+    return extract_with_keybert(top_n)
 
 def create_vector_db(chunks, model, kw_bert_model, kw_llm_model, use_keyllm, diversity, top_n):
     """
-    Creates a vector database from text chunks by extracting and encoding keywords.
-
+    Create a vector database from text chunks using keyword extraction.
+    
     Args:
-        chunks (list): List of text chunks to process.
-        model: Embedding model used to generate keyword vectors.
-        kw_bert_model: KeyBERT model for keyword extraction.
-        kw_llm_model: KeyLLM model for refining keywords (optional).
-        use_keyllm (bool, optional): Whether to use KeyLLM for keyword extraction. Defaults to False.
-        diversity (float, optional): Diversity parameter for MMR-based keyword extraction. Defaults to 0.1.
-        top_n (int, optional): Number of top keywords to extract per chunk. Defaults to 5.
-
+        chunks: List of text chunks to process
+        model: SentenceTransformer model for encoding
+        kw_bert_model: KeyBERT model instance
+        kw_llm_model: Optional KeyLLM model instance
+        use_keyllm: Whether to use KeyLLM
+        diversity: Diversity parameter for MMR
+        top_n: Number of keywords per chunk
+    
     Returns:
-        dict: A dictionary where the keys are keyword embeddings (tuples) and the values are lists of associated chunks.
+        Dictionary mapping keyword embeddings to associated chunks
     """
-    # Dictionary to store the keyword embeddings and their associated chunks
     chunk_keywords_dict = {}
     
-    # Extract keywords for all chunks using the helper function
-    keywords_list = extract_keywords_from_text(
-        chunks, 
-        kw_bert_model, 
-        kw_llm_model, 
-        use_keyllm=use_keyllm, 
-        diversity=diversity, 
-        top_n=top_n
-    )
-
-    # Ensure the keywords list matches the chunks, even for a single chunk
-    if len(chunks) == 1:
-        keywords_list = [keywords_list]
-
-    # Process each chunk and its extracted keywords
-    for chunk, keywords in zip(chunks, keywords_list):
-        # Create a string of sorted keywords for consistent embedding generation
-        keywords_str = " ".join(sorted(key[0] for key in keywords))
+    for chunk in chunks:
+        # Extract keywords for current chunk
+        keywords = extract_keywords_from_text(
+            doc=chunk,
+            kw_bert_model=kw_bert_model,
+            kw_llm_model=kw_llm_model,
+            model=model,
+            use_keyllm=use_keyllm,
+            diversity=diversity,
+            top_n=top_n
+        )
         
-        # Generate the embedding tuple for the keyword string
-        keywords_emb = tuple(model.encode(keywords_str))
-
-        # Add the chunk to the dictionary under its corresponding embedding
+        # Create sorted keyword string and generate embedding
+        keywords_str = " ".join(sorted(kw[0] for kw in keywords))
+        keywords_emb = tuple(model.encode(keywords_str).tolist())
+        
+        # Store chunk with its keyword embedding
         chunk_keywords_dict.setdefault(keywords_emb, []).append(chunk)
-
+    
     return chunk_keywords_dict
 
 def retrieve_documents(chunk_keywords_dict, question_emb, top_n):
@@ -281,7 +286,7 @@ def retrieve_documents(chunk_keywords_dict, question_emb, top_n):
     retrieved_chunks = [chunk for key in top_keys for chunk in chunk_keywords_dict[key]]
     return retrieved_chunks[:top_n]
 
-def get_answer_with_summary(question_answerer, summarizer, question, retrieved_chunks, sum_max_length, sum_min_length):
+def get_answer_with_summary(question_answerer, summarizer, question, context, sum_max_length, sum_min_length):
     """
     Retrieves an answer to the question from the context and generates a summary.
 
@@ -296,9 +301,10 @@ def get_answer_with_summary(question_answerer, summarizer, question, retrieved_c
     Returns:
         tuple: The answer and the generated summary.
     """
-    context = ' '.join(retrieved_chunks)
+    
     answer = question_answerer(question=question, context=context)
     summary = summarizer(context[:4500], max_length=sum_max_length, min_length=sum_min_length, do_sample=False)[0]['summary_text']
+    summary = 'None'
     return answer, summary
 
 class DocumentQuestionAnsweringPipeline:
@@ -306,7 +312,7 @@ class DocumentQuestionAnsweringPipeline:
     A pipeline for processing documents, extracting keywords, and answering questions 
     by leveraging embeddings, keyword extraction, and summarization.
     """
-    def __init__(self, embedding_model='all-MiniLM-L6-v2', llm_model='meta-llama/Llama-3.2-3B', qa_model='google-bert/bert-large-cased-whole-word-masking-finetuned-squad', sum_model='facebook/bart-large-cnn'):
+    def __init__(self, embedding_model='all-MiniLM-L6-v2', llm_model='Qwen/Qwen2.5-3B', qa_model='google-bert/bert-large-cased-whole-word-masking-finetuned-squad', sum_model='facebook/bart-large-cnn'):
         """
         Initializes the pipeline with the required models for keyword extraction, 
         question answering, and summarization.
@@ -322,7 +328,7 @@ class DocumentQuestionAnsweringPipeline:
             embedding_model, llm_model, qa_model, sum_model)
         self.chunk_keywords_dict = {}
 
-    def add_documents(self, docs, max_tokens=500, overlap_percentage=0.25, use_keyllm=False, diversity=0.3, top_n_kw=10):
+    def add_documents(self, docs, max_tokens=1000, overlap_percentage=0.5, use_keyllm=False, diversity=0.3, top_n_kw=10):
         """
         Splits documents into chunks and extracts keyword embeddings for each chunk.
         
@@ -339,13 +345,13 @@ class DocumentQuestionAnsweringPipeline:
         for doc in docs:
             chunks = split_document(doc, max_tokens, overlap_percentage)
             all_chunks.extend(chunks)
-        
+
         # Create a vector database of chunk keywords and update the chunk_keywords_dict
         new_chunk_keywords = create_vector_db(all_chunks, self.model, self.kw_bert_model, self.kw_llm_model, 
                                               use_keyllm, diversity, top_n_kw)
         self.chunk_keywords_dict = new_chunk_keywords
 
-    def answer_question(self, question, use_keyllm=False, diversity=0.3, top_n_chunk=3, top_n_kw=10, 
+    def answer_question(self, question, use_keyllm=False, diversity=0.3, top_n_chunk=10, top_n_kw=10, 
                         sum_max_length=130, sum_min_length=30):
         """
         Answers a question based on the context retrieved from relevant document chunks.
@@ -363,14 +369,15 @@ class DocumentQuestionAnsweringPipeline:
             tuple: A tuple containing the answer to the question and the generated summary.
         """
         # Extract keywords from the question
-        question_kw = extract_keywords_from_text(question, self.kw_bert_model, self.kw_llm_model, use_keyllm, 
+        question_kw = extract_keywords_from_text(question, self.kw_bert_model, self.kw_llm_model, self.model, use_keyllm, 
                                                  diversity, top_n_kw)
         question_kw_str = ", ".join(sorted([key[0] for key in question_kw]))
         question_emb = tuple(self.model.encode(question_kw_str))
         
         # Retrieve relevant document chunks and build context
         retrieved_chunks = retrieve_documents(self.chunk_keywords_dict, question_emb, top_n_chunk)
+        context = " ".join(retrieved_chunks)
         # Generate answer and summary
-        answer, summary = get_answer_with_summary(self.question_answerer, self.summarizer, question, retrieved_chunks, 
+        answer, summary = get_answer_with_summary(self.question_answerer, self.summarizer, question, context, 
                                                   sum_max_length, sum_min_length)
         return answer, summary
