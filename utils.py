@@ -6,7 +6,7 @@ def load_wiki_documents(question):
     """
     results = wiki.search(question)
     docs = []
-    for page in results:
+    for page in results[:3]:
         try:
             docs.append(wiki.page(page, auto_suggest=False).content)
         except Exception as e:
