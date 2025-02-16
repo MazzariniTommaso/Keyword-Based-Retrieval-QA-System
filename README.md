@@ -11,11 +11,13 @@ You can find the detailed report of the project [here](https://github.com/yourus
 - **Summarization**: Provides abstractive summarization with the BART model for concise content summaries.
 - **Interactive Interface**: Includes a graphical interface built with Gradio, enabling users to upload `.txt` files and interact with the system for QA and summarization tasks.
 
-## Installation
+## Installation and GPU requirements
 To install the necessary dependencies, run:
 ```bash
 pip install -r requirements.txt
 ```
+To leverage KeyLLM (powered by Qwen2.5-3B), you must have at least an NVIDIA GPU with 6GB of memory.
+
 ## Usage
 1. Run the project:
 ```bash
