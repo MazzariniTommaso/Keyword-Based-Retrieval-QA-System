@@ -1,4 +1,4 @@
-# DNLP_project
+# Keyword-Based Retrieval Q&A System
 
 ## Introduction
 This project addresses the task of enhancing retrieval-based Q&A systems through keyword extraction. We leverage KeyBERT, an unsupervised method using BERT embeddings, and integrate KeyLLM, a lightweight approach using large language models, to refine keyword extraction. Our system supports tasks like document summarization and retrieval-based question answering (QA).
